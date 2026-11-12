@@ -1,5 +1,36 @@
 # Changelog
 
+## [2.0.0](https://github.com/bardesss/arr-mcp/compare/v1.84.0...v2.0.0) (2026-11-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* **tools:** these tools and parameters are removed. Each one names its replacement.
+    - `stack_health` and `diagnose`: use `get_stack_health` and `diagnose_media`, which take the same arguments. Their `arr://docs/stack_health` and `arr://docs/diagnose` pages are gone too.
+    - `lookup_media`: use `search_media` with `source: "discover"`.
+    - `clean_queue`: use `remove_queue_item` with `orphaned: true`.
+    - `trigger_scan` actions `import`, `remap` and `postprocess`, its `download_id`, `reassignments` and `mapping` parameters, `bookdrop` with an `id`, and `service: "nzbget"`: use `import_download`. `bookdrop` without an `id` still rescans the Bookdrop.
+    - `update_media` on Grimmory (`service: "grimmory"`, `title`, `authors`, `series`, `series_number`, `lock_fields`, `unlock_fields`): use `update_book`.
+    - `set_monitoring` at artist level (`level: "artist"`, `artists`, `monitor_new_items`): use `update_media`, with one artist `id` per call, or no `id` for every artist.
+    - `manage_indexer` `action: "delete"`: use `delete_indexer`.
+    - `get_stack_health` `options` at `detail: "full"`: use `get_instance_options`.
+    - `blocklist_media` `tmdb_id`: use `id`, which is now required.
+
+### Features
+
+* **lidarr:** check and fix quality profiles with get_profile_issues and fix_profile ([#635](https://github.com/bardesss/arr-mcp/issues/635)) ([82a440a](https://github.com/bardesss/arr-mcp/commit/82a440a0624684026cf8b1956821d9b779791446))
+* **lidarr:** check for a replacement album before retry_download ([#633](https://github.com/bardesss/arr-mcp/issues/633)) ([e0e46f3](https://github.com/bardesss/arr-mcp/commit/e0e46f3669eb6453680b3f99bbc11bc7e890794d))
+* **lidarr:** read indexer seeding rules for get_stack_health ([#634](https://github.com/bardesss/arr-mcp/issues/634)) ([f986bd1](https://github.com/bardesss/arr-mcp/commit/f986bd1b3bd991391cd4a1e1802a34498b4b6444))
+* **sonarr:** set a series' rule for new seasons in update_media and add_media ([#630](https://github.com/bardesss/arr-mcp/issues/630)) ([bc38e2b](https://github.com/bardesss/arr-mcp/commit/bc38e2b55c1965c89bae6129ddeab622fc372ff0))
+* **tools:** remove the aliases deprecated in 1.x ([#627](https://github.com/bardesss/arr-mcp/issues/627)) ([2a522d7](https://github.com/bardesss/arr-mcp/commit/2a522d7c991747f67af2cf094ded4cbd9605a3e7))
+
+
+### Bug Fixes
+
+* **diagnose:** name the *arrs the stack runs in the managed remedy ([#631](https://github.com/bardesss/arr-mcp/issues/631)) ([3960c82](https://github.com/bardesss/arr-mcp/commit/3960c82a6dd93c02fc6e340f22b03f56eab51af9))
+* **queue:** name the *arr and client in the usenet rerun remedy ([#625](https://github.com/bardesss/arr-mcp/issues/625)) ([8155e97](https://github.com/bardesss/arr-mcp/commit/8155e97bc33c2535901dcea48d040a5c64bb7f53))
+* **queue:** read a paused download from the client's own row ([#632](https://github.com/bardesss/arr-mcp/issues/632)) ([968f8d0](https://github.com/bardesss/arr-mcp/commit/968f8d065cdbc41babcec9b293614ca779964e17))
+
 ## [1.84.0](https://github.com/bardesss/arr-mcp/compare/v1.83.1...v1.84.0) (2026-11-11)
 
 
