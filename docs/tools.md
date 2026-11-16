@@ -2787,6 +2787,27 @@ window past that comes back short, with a `note` naming the `offset` that
 continues it. `total` is the size of the whole list, up to 10,000: TMDB serves
 no page past 500.
 
+### `exclude`: what you already have or have seen
+
+`exclude: ["owned"]` leaves out anything already in the library (managed by an
+*arr or on the media server), matched by external id. `exclude: ["watched"]`
+leaves out what `user` has played: titles still in the library by their watch
+state, and titles watched **and since deleted** from the media server's whole
+play history. Plex keeps a history row for a deleted film with no id, only its
+title and release date, so those match on normalised title and year, a year
+either side; a deleted series matches on its title alone. Pass both to get only
+titles that are new to you.
+
+The source is read in chunks and filtered until `limit` survive, at most ten
+dataset reads or three Seerr reads a call. So `offset` stays a position in the
+*unfiltered* list: page on with the offset `note` names, not `offset +
+returned`. `excluded` counts what was left out and why; a title both owned and
+watched counts as `watched`.
+
+The whole-history read is Plex's; on Jellyfin, `watched` uses library watch
+state alone and `note` says so. If the history read fails, the media server is
+named in `degraded` and the library half still filters.
+
 ## `trigger_subtitle_search`
 
 The write half of `get_subtitles`, and it takes its arguments straight from

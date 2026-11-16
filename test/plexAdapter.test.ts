@@ -1344,3 +1344,32 @@ describe('PlexAdapter', () => {
         });
     });
 });
+
+describe('PlexAdapter.listPlayedTitles', () => {
+    // The two row shapes a live history read returns: an item still in the
+    // library carries ratingKey; a deleted one carries only title, type and
+    // originallyAvailableAt.
+    const history = {
+        MediaContainer: {
+            Metadata: [
+                { historyKey: '/status/sessions/history/9', ratingKey: '501', type: 'movie', title: 'Kept Film', originallyAvailableAt: '2019-05-01', viewedAt: 1_787_000_000, accountID: 1 },
+                { historyKey: '/status/sessions/history/3', type: 'movie', title: 'Gone Film', originallyAvailableAt: '2014-11-19', viewedAt: 1_737_696_727, accountID: 1 },
+                { historyKey: '/status/sessions/history/4', ratingKey: '77', type: 'episode', title: 'Pilot', grandparentTitle: 'A Show', grandparentKey: '/library/metadata/70', viewedAt: 1_737_000_000, accountID: 1 },
+                { historyKey: '/status/sessions/history/5', type: 'episode', title: 'Gone Ep', grandparentTitle: 'Gone Show', viewedAt: 1_736_000_000, accountID: 1 },
+                { historyKey: '/status/sessions/history/6', ratingKey: '88', type: 'track', title: 'A Song', viewedAt: 1_736_000_000, accountID: 1 },
+                { historyKey: '/status/sessions/history/7', ratingKey: '502', type: 'movie', title: 'Someone Else', viewedAt: 1_736_000_000, accountID: 2 }
+            ]
+        }
+    };
+
+    it('keeps deleted titles, reads the year from the release date, and reports episodes as their series', async () => {
+        const { adapter } = plex({ '/status/sessions/history/all': history });
+        const played = await adapter.listPlayedTitles({ id: '1', name: 'Bartus' });
+        expect(played.map(p => ({ ...p, title: unfenced(p.title) }))).toEqual([
+            { kind: 'movie', title: 'Kept Film', year: 2019, itemId: '501', lastPlayed: new Date(1_787_000_000_000).toISOString() },
+            { kind: 'movie', title: 'Gone Film', year: 2014, lastPlayed: new Date(1_737_696_727_000).toISOString() },
+            { kind: 'series', title: 'A Show', itemId: '70', lastPlayed: new Date(1_737_000_000_000).toISOString() },
+            { kind: 'series', title: 'Gone Show', lastPlayed: new Date(1_736_000_000_000).toISOString() }
+        ]);
+    });
+});

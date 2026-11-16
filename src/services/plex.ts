@@ -20,6 +20,8 @@ import {
     type MetadataRepairCapable,
     type PlaybackCapable,
     type PlaybackEntry,
+    type PlayedTitle,
+    type PlayedTitlesCapable,
     type ScanState,
     type ScanStateCapable,
     type SearchCapable,
@@ -60,6 +62,11 @@ export type RawPlexItem = {
      *  Unconfirmed against a live server pending the tester; read alongside
      *  `lastViewedAt` rather than betting on one. */
     viewedAt?: number;
+    /** A release date, `YYYY-MM-DD`. On a history row for a deleted film it is
+     *  the only thing besides the title left to say which film it was. */
+    originallyAvailableAt?: string;
+    /** History rows: `/library/metadata/<id>` of the episode's series. */
+    grandparentKey?: string;
     addedAt?: number;
     Genre?: { tag?: string }[];
     Media?: { Part?: { file?: string; size?: number }[] }[];
@@ -101,6 +108,11 @@ export const msToSeconds = (ms: number | undefined): number | undefined =>
  * Zero is treated as absent: no real playback happened at the epoch, and a
  * 1970 timestamp in a tool response reads as data rather than as a gap.
  */
+const yearOf = (date: string | undefined): number | undefined => {
+    const match = date === undefined ? null : /^(\d{4})-/.exec(date);
+    return match === null ? undefined : Number(match[1]);
+};
+
 export const epochToIso = (seconds: number | undefined): string | undefined =>
     typeof seconds === 'number' && seconds > 0 ? new Date(seconds * 1000).toISOString() : undefined;
 
@@ -228,6 +240,7 @@ export class PlexAdapter
         ServiceAdapter,
         UserDirectoryCapable,
         PlaybackCapable,
+        PlayedTitlesCapable,
         UserLibraryCapable,
         UserSeasonsCapable,
         SearchCapable,
@@ -448,6 +461,54 @@ export class PlexAdapter
                 ...(lastPlayed === undefined ? {} : { lastPlayed })
             };
         });
+    }
+
+    /** History is read to the end for `listPlayedTitles`; this only stops a
+     *  runaway. 200 pages is 100,000 plays. */
+    static readonly #MAX_PLAYED_PAGES = 200;
+
+    /**
+     * Every title this user has ever played, deleted ones included.
+     *
+     * Read live against a real server: a history row for an item still in the library
+     * carries `ratingKey`; one for a deleted item carries no `ratingKey`, no
+     * guid and no year, only `title`, `type` and `originallyAvailableAt`. That
+     * release date is why `year` comes from it rather than from `year`.
+     * Music is left out: nothing asks this of a track.
+     */
+    async listPlayedTitles(user: ServiceUser): Promise<PlayedTitle[]> {
+        const isMine = (item: RawPlexItem): boolean => item.accountID !== undefined && String(item.accountID) === user.id;
+        const rows = await this.#paged(
+            start => `/status/sessions/history/all?X-Plex-Container-Start=${start}&X-Plex-Container-Size=${PAGE_SIZE}&sort=viewedAt:desc`,
+            // A `stopEarly` that never fires turns the page cap into an
+            // honest, logged stop instead of a thrown diagnosis.
+            { maxPages: PlexAdapter.#MAX_PLAYED_PAGES, stopEarly: () => false }
+        );
+        const out: PlayedTitle[] = [];
+        for (const item of rows) {
+            if (!isMine(item)) continue;
+            const lastPlayed = epochToIso(item.viewedAt ?? item.lastViewedAt);
+            const when = lastPlayed === undefined ? {} : { lastPlayed };
+            if (item.type === 'movie' && item.title !== undefined && item.title !== '') {
+                const year = yearOf(item.originallyAvailableAt) ?? item.year;
+                out.push({
+                    kind: 'movie',
+                    title: this.#fence('title', item.title),
+                    ...(year === undefined ? {} : { year }),
+                    ...(item.ratingKey === undefined ? {} : { itemId: item.ratingKey }),
+                    ...when
+                });
+            } else if (item.type === 'episode' && item.grandparentTitle !== undefined && item.grandparentTitle !== '') {
+                const seriesId = item.grandparentRatingKey ?? item.grandparentKey?.split('/').pop();
+                out.push({
+                    kind: 'series',
+                    title: this.#fence('grandparentTitle', item.grandparentTitle),
+                    ...(seriesId === undefined || seriesId === '' ? {} : { itemId: seriesId }),
+                    ...when
+                });
+            }
+        }
+        return out;
     }
 
     /**

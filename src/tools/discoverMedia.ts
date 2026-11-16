@@ -5,6 +5,7 @@ import { logger } from '../core/logger.ts';
 import {
     DetailSchema,
     LimitSchema,
+    MAX_LIMIT,
     OffsetSchema,
     PagedOutputSchema,
     READ_ONLY,
@@ -20,6 +21,93 @@ import type { ImdbDataset } from '../metadata/imdbDataset.ts';
 import type { DiscoverPage, SearchHit } from '../services/types.ts';
 import { withoutDisplay } from '../core/display.ts';
 import { searchLine, type GetSearchResult } from './searchMedia.ts';
+import { buildSeenFilter, type Exclusion, type SeenDeps } from './seenFilter.ts';
+import { UserSchema } from './getPlayback.ts';
+
+type DiscoverResult = GetSearchResult & { excluded?: Record<Exclusion, number> };
+
+type DiscoverOpts = {
+    kind: 'movie' | 'series';
+    genre?: string;
+    year?: number;
+    minRating?: number;
+    similarTo?: string;
+    detail: DetailLevel;
+    limit: number;
+    offset?: number;
+    exclude?: readonly Exclusion[];
+    user?: string;
+};
+
+/** Source reads one filtered call may make. The dataset is a local query; Seerr asks TMDB for every page. */
+const MAX_READS = { dataset: 10, seerr: 3 } as const;
+
+/**
+ * `discover_media` with `exclude`: reads the source in chunks and drops what
+ * is already owned or watched until `limit` survive or the read budget runs
+ * out. `offset` stays a position in the *source* list, so the continuation is
+ * the offset reached, said in `note`, rather than `offset + returned`: what
+ * was skipped would otherwise be read again.
+ */
+export async function buildDiscoverMedia(
+    adapter: SeerrAdapter | undefined,
+    opts: DiscoverOpts,
+    dataset?: ImdbDataset,
+    seenDeps?: SeenDeps
+): Promise<DiscoverResult> {
+    const exclude = opts.exclude ?? [];
+    if (exclude.length === 0) return discoverWindow(adapter, opts, dataset);
+
+    const seen = await buildSeenFilter(seenDeps, {
+        exclude,
+        kind: opts.kind,
+        ...(opts.user === undefined ? {} : { user: opts.user })
+    });
+    const start = Math.max(Math.trunc(opts.offset ?? 0), 0);
+    // Minimal detail drops `year`, which a deleted film's history row needs to be matched on.
+    const innerDetail: DetailLevel = opts.detail === 'minimal' ? 'standard' : opts.detail;
+    const chunk = Math.min(MAX_LIMIT, Math.max(opts.limit * 2, 40));
+    const maxReads = adapter === undefined ? MAX_READS.dataset : MAX_READS.seerr;
+
+    const kept: SearchHit[] = [];
+    const excluded: Record<Exclusion, number> = { owned: 0, watched: 0 };
+    let cursor = start;
+    let last: GetSearchResult | undefined;
+    for (let reads = 0; kept.length < opts.limit && reads < maxReads; reads++) {
+        const page = await discoverWindow(adapter, { ...opts, detail: innerDetail, offset: cursor, limit: chunk }, dataset);
+        last = page;
+        // Nothing could answer, or the source failed: that answer, as is.
+        if (page.degraded.length > 0 || (page.returned === 0 && page.note !== undefined && reads === 0)) {
+            return { ...page, degraded: [...new Set([...page.degraded, ...seen.degraded])] };
+        }
+        let consumed = 0;
+        for (const hit of page.items) {
+            consumed++;
+            const verdict = seen.verdict(hit);
+            if (verdict !== undefined) excluded[verdict]++;
+            else kept.push(hit);
+            if (kept.length === opts.limit) break;
+        }
+        cursor += consumed;
+        if (page.returned === 0 || cursor >= page.total) break;
+    }
+
+    const total = last?.total ?? 0;
+    const truncated = cursor < total;
+    const skipped = `Left out ${excluded.owned} already owned and ${excluded.watched} already watched.`;
+    const notes = [skipped, truncated ? `offset ${cursor} continues.` : '', seen.note ?? ''].filter(n => n !== '');
+    return {
+        items: kept.map(h => project(h, opts.detail)),
+        total,
+        returned: kept.length,
+        offset: start,
+        truncated,
+        degraded: [...new Set([...(last?.degraded ?? []), ...seen.degraded])],
+        counts: last?.counts ?? {},
+        excluded,
+        note: notes.join(' ')
+    };
+}
 
 const project = (h: SearchHit, detail: DetailLevel): SearchHit => {
     if (detail === 'minimal') {
@@ -29,20 +117,7 @@ const project = (h: SearchHit, detail: DetailLevel): SearchHit => {
     return withoutDisplay(h);
 };
 
-export async function buildDiscoverMedia(
-    adapter: SeerrAdapter | undefined,
-    opts: {
-        kind: 'movie' | 'series';
-        genre?: string;
-        year?: number;
-        minRating?: number;
-        similarTo?: string;
-        detail: DetailLevel;
-        limit: number;
-        offset?: number;
-    },
-    dataset?: ImdbDataset
-): Promise<GetSearchResult> {
+async function discoverWindow(adapter: SeerrAdapter | undefined, opts: DiscoverOpts, dataset?: ImdbDataset): Promise<GetSearchResult> {
     if (opts.similarTo !== undefined && (opts.genre !== undefined || opts.year !== undefined || opts.minRating !== undefined)) {
         // Two different questions. Silently picking one is how a model gets
         // a confident answer to a question it did not ask.
@@ -236,12 +311,23 @@ const DiscoverMediaInput = toolInput({
         .describe(
             '[[seerr: A TMDB numeric id: find something like it. Seerr only, and mutually exclusive with genre/year/min_rating: it answers a different question.]]'
         ),
+    exclude: z
+        .array(z.enum(['owned', 'watched']))
+        .optional()
+        .describe(
+            '`owned`: leave out what is already in the library, managed or on the media server. `watched`: leave out what `user` has played, including titles watched and since deleted. With either, `offset` is a position in the unfiltered list, so page on with the offset `note` gives.'
+        ),
+    user: UserSchema,
     detail: DetailSchema,
     limit: LimitSchema,
     offset: OffsetSchema
 }, { undocumented: ['media_type'] });
 
 const DiscoverMediaOutput = PagedOutputSchema.extend({
+    excluded: z
+        .object({ owned: z.number(), watched: z.number() })
+        .optional()
+        .describe('With `exclude`: how many hits were left out, and why.'),
     note: z
         .string()
         .optional()
@@ -253,7 +339,8 @@ const DiscoverMediaOutput = PagedOutputSchema.extend({
 export function registerDiscoverMedia(
     server: McpServer,
     adapter: SeerrAdapter | undefined,
-    dataset?: ImdbDataset
+    dataset?: ImdbDataset,
+    seenDeps?: SeenDeps
 ): void {
     server.registerTool(
         'discover_media',
@@ -265,7 +352,7 @@ export function registerDiscoverMedia(
             outputSchema: DiscoverMediaOutput,
             inputSchema: DiscoverMediaInput
         },
-        async ({ kind, media_type, genre, year, min_rating, similar_to, detail, limit, offset }) => {
+        async ({ kind, media_type, genre, year, min_rating, similar_to, exclude, user, detail, limit, offset }) => {
             const resolved =
                 preferred({
                     name: 'kind',
@@ -281,10 +368,12 @@ export function registerDiscoverMedia(
                 ...(year === undefined ? {} : { year }),
                 ...(min_rating === undefined ? {} : { minRating: min_rating }),
                 ...(similar_to === undefined ? {} : { similarTo: similar_to }),
+                ...(exclude === undefined ? {} : { exclude }),
+                ...(user === undefined ? {} : { user }),
                 detail,
                 limit,
                 offset
-            }, dataset);
+            }, dataset, seenDeps);
             const summary =
                 result.degraded.length > 0
                     ? 'Seerr could not answer; nothing to discover.'

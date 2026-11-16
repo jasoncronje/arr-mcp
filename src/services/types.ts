@@ -2384,6 +2384,37 @@ export const hasPlayback = (a: ServiceAdapter): a is ServiceAdapter & PlaybackCa
     );
 };
 
+/**
+ * One title a user has ever played, from the media server's whole play
+ * history rather than its library: a film deleted after watching is still
+ * here, and the library has forgotten it.
+ *
+ * A history row for something deleted carries no external id on Plex, only a
+ * title and a release date, so `year` is what a caller has to join on. An
+ * episode is reported as its series, titled by the series.
+ */
+export type PlayedTitle = {
+    kind: 'movie' | 'series';
+    /** Fenced. */
+    title: string;
+    year?: number;
+    /** The media server's id for the film or series, while it is still in the library. */
+    itemId?: string;
+    lastPlayed?: string;
+};
+
+/**
+ * Separate from `PlaybackCapable` because it reads history to the end:
+ * `getWatchHistory` stops at a page of recent plays, which is the right answer
+ * to "what did I watch lately" and the wrong one to "have I ever watched this".
+ */
+export interface PlayedTitlesCapable {
+    listPlayedTitles(user: ServiceUser): Promise<PlayedTitle[]>;
+}
+
+export const hasPlayedTitles = (a: ServiceAdapter): a is ServiceAdapter & PlayedTitlesCapable =>
+    typeof (a as Partial<PlayedTitlesCapable>).listPlayedTitles === 'function';
+
 /** What the media-server half of this stack is, as a type. */
 export type MediaServerAdapter = ServiceAdapter &
     UserDirectoryCapable &
