@@ -2787,6 +2787,15 @@ window past that comes back short, with a `note` naming the `offset` that
 continues it. `total` is the size of the whole list, up to 10,000: TMDB serves
 no page past 500.
 
+### Ranking the dataset: `sort` and `min_votes`
+
+From the IMDb dataset, `sort: "rating"` (the default) lists highest rated
+first and `sort: "popular"` lists most voted on first, rating breaking ties.
+Ranked by rating alone, the top of the list is titles with a dozen perfect
+votes, so titles under `min_votes` (default 1,000) are left out; `min_votes: 0`
+lifts the floor. Both refuse when Seerr is configured, which ranks by
+popularity already.
+
 ### `exclude`: what you already have or have seen
 
 `exclude: ["owned"]` leaves out anything already in the library (managed by an

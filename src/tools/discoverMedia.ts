@@ -37,7 +37,16 @@ type DiscoverOpts = {
     offset?: number;
     exclude?: readonly Exclusion[];
     user?: string;
+    sort?: 'rating' | 'popular';
+    minVotes?: number;
 };
+
+/**
+ * Ranked by rating alone, the dataset's top is titles with a handful of
+ * perfect votes: nobody has heard of them. 1,000 votes is the floor below
+ * which a rating says little; `min_votes: 0` lifts it.
+ */
+const DEFAULT_MIN_VOTES = 1000;
 
 /** Source reads one filtered call may make. The dataset is a local query; Seerr asks TMDB for every page. */
 const MAX_READS = { dataset: 10, seerr: 3 } as const;
@@ -129,6 +138,10 @@ async function discoverWindow(adapter: SeerrAdapter | undefined, opts: DiscoverO
         // Rejecting an obviously-wrong id here is the only informative move
         // available for that case.
         throw new Error(`similar_to "${opts.similarTo}" is not a TMDB id. Pass the numeric id, e.g. "693134".`);
+    }
+
+    if (adapter !== undefined && (opts.sort !== undefined || opts.minVotes !== undefined)) {
+        throw new Error('sort and min_votes rank the IMDb dataset, which answers only when no Seerr is configured. Seerr already ranks by popularity: leave them out.');
     }
 
     if (adapter === undefined) {
@@ -223,7 +236,7 @@ async function discoverWindow(adapter: SeerrAdapter | undefined, opts: DiscoverO
  * returning nothing.
  */
 function fromDataset(
-    opts: { kind: 'movie' | 'series'; genre?: string; year?: number; minRating?: number; detail: DetailLevel; limit: number; offset?: number },
+    opts: { kind: 'movie' | 'series'; genre?: string; year?: number; minRating?: number; sort?: 'rating' | 'popular'; minVotes?: number; detail: DetailLevel; limit: number; offset?: number },
     dataset: ImdbDataset | undefined
 ): GetSearchResult {
     const empty = { items: [], total: 0, returned: 0, offset: 0, truncated: false, degraded: [], counts: {} };
@@ -253,6 +266,8 @@ function fromDataset(
             ...(opts.genre === undefined ? {} : { genre: opts.genre }),
             ...(opts.year === undefined ? {} : { year: opts.year }),
             ...(opts.minRating === undefined ? {} : { minRating: opts.minRating }),
+            minVotes: opts.minVotes ?? DEFAULT_MIN_VOTES,
+            ...(opts.sort === undefined ? {} : { sort: opts.sort }),
             limit: opts.limit,
             ...(opts.offset === undefined ? {} : { offset: opts.offset })
         })
@@ -281,7 +296,8 @@ function fromDataset(
         kind: opts.kind,
         ...(opts.genre === undefined ? {} : { genre: opts.genre }),
         ...(opts.year === undefined ? {} : { year: opts.year }),
-        ...(opts.minRating === undefined ? {} : { minRating: opts.minRating })
+        ...(opts.minRating === undefined ? {} : { minRating: opts.minRating }),
+        minVotes: opts.minVotes ?? DEFAULT_MIN_VOTES
     });
 
     return {
@@ -318,6 +334,16 @@ const DiscoverMediaInput = toolInput({
             '`owned`: leave out what is already in the library, managed or on the media server. `watched`: leave out what `user` has played, including titles watched and since deleted. With either, `offset` is a position in the unfiltered list, so page on with the offset `note` gives.'
         ),
     user: UserSchema,
+    sort: z
+        .enum(['rating', 'popular'])
+        .optional()
+        .describe('IMDb dataset only. `rating` (default): highest rated first. `popular`: most voted on first, the titles most people know.'),
+    min_votes: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(`IMDb dataset only. Leave out titles with fewer IMDb votes. Default ${DEFAULT_MIN_VOTES}; 0 for none.`),
     detail: DetailSchema,
     limit: LimitSchema,
     offset: OffsetSchema
@@ -352,7 +378,7 @@ export function registerDiscoverMedia(
             outputSchema: DiscoverMediaOutput,
             inputSchema: DiscoverMediaInput
         },
-        async ({ kind, media_type, genre, year, min_rating, similar_to, exclude, user, detail, limit, offset }) => {
+        async ({ kind, media_type, genre, year, min_rating, similar_to, exclude, user, sort, min_votes, detail, limit, offset }) => {
             const resolved =
                 preferred({
                     name: 'kind',
@@ -370,6 +396,8 @@ export function registerDiscoverMedia(
                 ...(similar_to === undefined ? {} : { similarTo: similar_to }),
                 ...(exclude === undefined ? {} : { exclude }),
                 ...(user === undefined ? {} : { user }),
+                ...(sort === undefined ? {} : { sort }),
+                ...(min_votes === undefined ? {} : { minVotes: min_votes }),
                 detail,
                 limit,
                 offset

@@ -334,6 +334,14 @@ describe('discover schema', () => {
         expect(plan.join('\n')).toContain('title_bucket_rating');
         ds.close();
     });
+
+    it('walks the votes index for sort: popular, so no sort is built per call', () => {
+        const ds = ImdbDataset.ephemeral();
+        const plan = ds.explainDiscover({ kind: 'movie', sort: 'popular' });
+        expect(plan.join('\n')).not.toContain('TEMP B-TREE');
+        expect(plan.join('\n')).toContain('title_bucket_votes');
+        ds.close();
+    });
 });
 
 describe('discover ordering', () => {

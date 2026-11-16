@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS title_bucket_rating ON title(bucket, rating DESC, year DESC);
+CREATE INDEX IF NOT EXISTS title_bucket_votes ON title(bucket, votes DESC, rating DESC);
 `;
 
 /** The filters `discover` and `countDiscover` both answer to. */
@@ -154,6 +155,10 @@ type DiscoverQuery = {
     genre?: string | undefined;
     year?: number | undefined;
     minRating?: number | undefined;
+    /** Titles with fewer IMDb votes are left out. */
+    minVotes?: number | undefined;
+    /** `rating` (default): highest rated first. `popular`: most voted on first, rating breaking ties. */
+    sort?: 'rating' | 'popular' | undefined;
 };
 
 /**
@@ -303,6 +308,10 @@ export class ImdbDataset {
             where.push('t.rating >= ?');
             args.push(q.minRating);
         }
+        if (q.minVotes !== undefined && q.minVotes > 0) {
+            where.push('t.votes >= ?');
+            args.push(q.minVotes);
+        }
 
         return { where, args };
     }
@@ -313,11 +322,12 @@ export class ImdbDataset {
      * `explainDiscover` existing to catch exactly that kind of silent drift is
      * pointless if it is checking a hand-duplicated copy of the query.
      */
-    #discoverSql(where: string[]): string {
+    #discoverSql(where: string[], sort: DiscoverQuery['sort']): string {
+        const order = sort === 'popular' ? 't.votes DESC, t.rating DESC' : 't.rating DESC, t.year DESC';
         return `SELECT t.tconst, t.title, t.year, t.runtime, t.genres, t.rating, t.votes
                    FROM title t
                   WHERE ${where.join(' AND ')}
-               ORDER BY t.rating DESC, t.year DESC
+               ORDER BY ${order}
                   LIMIT ? OFFSET ?`;
     }
 
@@ -342,7 +352,7 @@ export class ImdbDataset {
         // every page after the first came back empty.
         args.push(q.limit, q.offset ?? 0);
 
-        const rows = this.#db.prepare(this.#discoverSql(where)).all(...args) as {
+        const rows = this.#db.prepare(this.#discoverSql(where, q.sort)).all(...args) as {
             tconst: string;
             title: string;
             year: number | null;
@@ -395,7 +405,7 @@ export class ImdbDataset {
     explainDiscover(q: DiscoverQuery): string[] {
         const { where, args } = this.#discoverFilter(q);
         const rows = this.#db
-            .prepare(`EXPLAIN QUERY PLAN ${this.#discoverSql(where)}`)
+            .prepare(`EXPLAIN QUERY PLAN ${this.#discoverSql(where, q.sort)}`)
             .all(...args, 20, 0) as { detail: string }[];
         return rows.map(r => r.detail);
     }

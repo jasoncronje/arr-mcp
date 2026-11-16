@@ -1353,12 +1353,41 @@ describe('IMDb ratings on the not-yet-owned paths', () => {
             ]
         });
 
-        const page2 = await buildDiscoverMedia(undefined, { kind: 'movie', detail: 'full', limit: 1, offset: 1 }, db);
+        const page2 = await buildDiscoverMedia(undefined, { kind: 'movie', detail: 'full', limit: 1, offset: 1, minVotes: 0 }, db);
 
         expect(page2.items.map(i => i.title)).toEqual(['<<untrusted:imdb.title>>Second<</>>']);
         expect(page2.total).toBe(3);
         expect(page2.offset).toBe(1);
         expect(page2.offset + page2.returned).toBeLessThan(page2.total);
+    });
+
+    it('leaves out thinly voted titles by default, and sorts by votes when asked', async () => {
+        db = ImdbDataset.ephemeral();
+        db.replaceAll({
+            titles: [
+                { tconst: 'tt1', kind: 'movie', title: 'Obscure', year: 2001 },
+                { tconst: 'tt2', kind: 'movie', title: 'Known', year: 2002 },
+                { tconst: 'tt3', kind: 'movie', title: 'Famous', year: 2003 }
+            ],
+            ratings: [
+                { tconst: 'tt1', average: 9.9, votes: 12 },
+                { tconst: 'tt2', average: 8.0, votes: 5_000 },
+                { tconst: 'tt3', average: 7.5, votes: 900_000 }
+            ]
+        });
+        const titles = (r: { items: { title: string }[] }) => r.items.map(i => i.title.replace(/<<[^>]*>>/g, ''));
+
+        const byRating = await buildDiscoverMedia(undefined, { kind: 'movie', detail: 'full', limit: 10 }, db);
+        expect(titles(byRating)).toEqual(['Known', 'Famous']);
+        expect(byRating.total).toBe(2);
+
+        const popular = await buildDiscoverMedia(undefined, { kind: 'movie', detail: 'full', limit: 10, sort: 'popular', minVotes: 0 }, db);
+        expect(titles(popular)).toEqual(['Famous', 'Known', 'Obscure']);
+    });
+
+    it('refuses sort and min_votes when Seerr answers, rather than ignoring them', async () => {
+        const seerr = {} as unknown as Parameters<typeof buildDiscoverMedia>[0];
+        await expect(buildDiscoverMedia(seerr, { kind: 'movie', detail: 'full', limit: 10, sort: 'popular' })).rejects.toThrow(/IMDb dataset/);
     });
 
     it('rates a lookup hit for something not in the library at all', async () => {
